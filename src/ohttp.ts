@@ -1,12 +1,11 @@
-import { loadCrypto } from "./webCrypto.ts";
-import { concatArrays, i2Osp, max } from "./utils.ts";
+import { loadCrypto } from "./webCrypto";
+import { concatArrays, i2Osp, max } from "./utils";
 import {
   InvalidConfigIdError,
   InvalidContentTypeError,
   InvalidEncodingError,
   InvalidHpkeCiphersuiteError,
-} from "./errors.ts";
-
+} from "./errors";
 import { Aead, CipherSuite, Kdf, Kem } from "hpke-js";
 import { BHttpDecoder, BHttpEncoder } from "bhttp-js";
 

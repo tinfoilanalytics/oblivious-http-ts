@@ -1,4 +1,3 @@
-declare const Deno: undefined;
 declare const caches: undefined;
 
 /**
@@ -10,11 +9,6 @@ export const isBrowser = () => typeof window !== "undefined";
  * Checks whether the execution env is Cloudflare Workers or not.
  */
 export const isCloudflareWorkers = () => typeof caches !== "undefined";
-
-/**
- * Checks whether the execution env is Deno or not.
- */
-export const isDeno = () => typeof Deno !== "undefined";
 
 /**
  * Checks whetehr the type of input is CryptoKeyPair or not.
