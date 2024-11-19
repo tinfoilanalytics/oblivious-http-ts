@@ -6,7 +6,7 @@ import {
   InvalidEncodingError,
   InvalidHpkeCiphersuiteError,
 } from "./errors";
-import { Aead, CipherSuite, Kdf, Kem } from "hpke-js";
+import { AeadId, CipherSuite, KdfId, KemId } from "hpke-js";
 import { BHttpDecoder, BHttpEncoder } from "bhttp-js";
 
 const invalidEncodingErrorString = "Invalid message encoding";
@@ -27,17 +27,17 @@ async function randomBytes(l: number): Promise<Uint8Array> {
   return buffer;
 }
 
-function checkHpkeCiphersuite(kem: Kem, kdf: Kdf, aead: Aead) {
+function checkHpkeCiphersuite(kem: KemId, kdf: KdfId, aead: AeadId) {
   if (
-    kem != Kem.DhkemX25519HkdfSha256 &&
-    kdf != Kdf.HkdfSha256 &&
-    aead != Aead.Aes128Gcm
+    kem !== KemId.DhkemX25519HkdfSha256 ||
+    kdf !== KdfId.HkdfSha256 ||
+    aead !== AeadId.Aes128Gcm
   ) {
     throw new InvalidHpkeCiphersuiteError(invalidHpkeCiphersuiteErrorString);
   }
 }
 
-function encodeSymmetricAlgorithms(kdf: Kdf, aead: Aead): Uint8Array {
+function encodeSymmetricAlgorithms(kdf: KdfId, aead: AeadId): Uint8Array {
   return new Uint8Array([
     0x00,
     0x04, // Length
@@ -50,9 +50,9 @@ function encodeSymmetricAlgorithms(kdf: Kdf, aead: Aead): Uint8Array {
 
 export class KeyConfig {
   public keyId: number;
-  public kem: Kem;
-  public kdf: Kdf;
-  public aead: Aead;
+  public kem: KemId;
+  public kdf: KdfId;
+  public aead: AeadId;
   public keyPair: Promise<CryptoKeyPair>;
 
   constructor(keyId: number) {
@@ -60,9 +60,9 @@ export class KeyConfig {
       throw new InvalidConfigIdError(invalidKeyIdErrorString);
     }
     this.keyId = keyId;
-    this.kem = Kem.DhkemX25519HkdfSha256;
-    this.kdf = Kdf.HkdfSha256;
-    this.aead = Aead.Aes128Gcm;
+    this.kem = KemId.DhkemX25519HkdfSha256;
+    this.kdf = KdfId.HkdfSha256;
+    this.aead = AeadId.Aes128Gcm;
     const suite = new CipherSuite({
       kem: this.kem,
       kdf: this.kdf,
@@ -90,9 +90,9 @@ export class DeterministicKeyConfig extends KeyConfig {
       throw new InvalidConfigIdError(invalidKeyIdErrorString);
     }
     this.keyId = keyId;
-    this.kem = Kem.DhkemX25519HkdfSha256;
-    this.kdf = Kdf.HkdfSha256;
-    this.aead = Aead.Aes128Gcm;
+    this.kem = KemId.DhkemX25519HkdfSha256;
+    this.kdf = KdfId.HkdfSha256;
+    this.aead = AeadId.Aes128Gcm;
     const suite = new CipherSuite({
       kem: this.kem,
       kdf: this.kdf,
@@ -104,17 +104,17 @@ export class DeterministicKeyConfig extends KeyConfig {
 
 export class PublicKeyConfig {
   public keyId: number;
-  public kem: Kem;
-  public kdf: Kdf;
-  public aead: Aead;
+  public kem: KemId;
+  public kdf: KdfId;
+  public aead: AeadId;
   public suite: CipherSuite;
   public publicKey: CryptoKey;
 
   constructor(
     keyId: number,
-    kem: Kem,
-    kdf: Kdf,
-    aead: Aead,
+    kem: KemId,
+    kdf: KdfId,
+    aead: AeadId,
     publicKey: CryptoKey,
   ) {
     if (keyId < 0 || keyId > 255) {
@@ -141,9 +141,8 @@ export class PublicKeyConfig {
       (this.kem >> 8) & 0xFF,
       this.kem & 0xFF,
     ]);
-    const kemContext = await this.suite.kemContext();
     const encodedKey = new Uint8Array(
-      await kemContext.serializePublicKey(
+      await this.suite.kem.serializePublicKey(
         this.publicKey,
       ),
     );
@@ -194,24 +193,24 @@ export class ServerResponseContext {
 
   async encapsulate(encodedResponse: Uint8Array): Promise<ServerResponse> {
     const responseNonce = await randomBytes(
-      max(this.suite.aeadKeySize, this.suite.aeadNonceSize),
+      max(this.suite.aead.keySize, this.suite.aead.nonceSize),
     );
     const salt = concatArrays(new Uint8Array(this.enc), responseNonce);
 
-    const kdf = await this.suite.kdfContext();
+    const kdf = this.suite.kdf;
     const prk = await kdf.extract(salt.buffer as ArrayBuffer, this.secret.buffer as ArrayBuffer);
     const aeadKey = await kdf.expand(
       prk,
       new TextEncoder().encode(aeadKeyLabel).buffer as ArrayBuffer,
-      this.suite.aeadKeySize,
+      this.suite.aead.keySize,
     );
     const aeadNonce = await kdf.expand(
       prk,
       new TextEncoder().encode(aeadNonceLabel).buffer as ArrayBuffer,
-      this.suite.aeadNonceSize,
+      this.suite.aead.nonceSize,
     );
 
-    const aeadKeyS = await this.suite.createAeadKey(aeadKey);
+    const aeadKeyS = this.suite.aead.createEncryptionContext(aeadKey);
     const encResponse = new Uint8Array(
       await aeadKeyS.seal(
         aeadNonce,
@@ -269,7 +268,7 @@ export class Server {
 
     const exportContext = new TextEncoder().encode(responseInfoLabel);
     const secret = new Uint8Array(
-      await recipient.export(exportContext.buffer as ArrayBuffer, clientRequest.suite.aeadKeySize),
+      await recipient.export(exportContext.buffer as ArrayBuffer, clientRequest.suite.aead.keySize),
     );
 
     return new ServerResponseContext(
@@ -286,9 +285,9 @@ export class Server {
     }
     const hdr = msg.slice(0, requestHdrLength);
     const keyId = hdr[0];
-    const kemId = (hdr[1] << 0xFF) | hdr[2];
-    const kdfId = (hdr[3] << 0xFF) | hdr[4];
-    const aeadId = (hdr[5] << 0xFF) | hdr[6];
+    const kemId = ((hdr[1] << 0xFF) | hdr[2]) as KemId;
+    const kdfId = ((hdr[3] << 0xFF) | hdr[4]) as KdfId;
+    const aeadId = ((hdr[5] << 0xFF) | hdr[6]) as AeadId;
 
     if (keyId != this.config.keyId) {
       throw new InvalidConfigIdError(invalidKeyIdErrorString);
@@ -301,7 +300,7 @@ export class Server {
       aead: aeadId,
     });
     
-    const encSize = suite.kemEncSize;
+    const encSize = suite.kem.encSize;
     if (msg.length < requestHdrLength+encSize) {
       throw new InvalidEncodingError(invalidEncodingErrorString);
     }
@@ -336,19 +335,18 @@ export class Server {
 export class ClientConstructor {
   async clientForConfig(config: Uint8Array): Promise<Client> {
     const keyId = config[0];
-    const kemId = (config[1] << 8) | config[2];
+    const kemId = ((config[1] << 8) | config[2]) as KemId;
     const suite = new CipherSuite({
       kem: kemId,
-      kdf: Kdf.HkdfSha256, // Garbage (to create the suite)
-      aead: Aead.Aes128Gcm, // Garbage (to create the suite)
+      kdf: KdfId.HkdfSha256, // Garbage (to create the suite)
+      aead: AeadId.Aes128Gcm, // Garbage (to create the suite)
     });
-    const kemContext = await suite.kemContext();
-    const publicKey = await kemContext.deserializePublicKey(
-      config.slice(3, 3 + suite.kemPublicKeySize).buffer as ArrayBuffer,
+    const publicKey = await suite.kem.deserializePublicKey(
+      config.slice(3, 3 + suite.kem.publicKeySize).buffer as ArrayBuffer,
     );
-    const offset = 3 + suite.kemPublicKeySize + 2; // skip over the length, since we pick the first one pair of symmetric algorithms
-    const kdfId = (config[offset] << 8) | config[offset + 1];
-    const aeadId = (config[offset + 2] << 8) | config[offset + 3];
+    const offset = 3 + suite.kem.publicKeySize + 2; // skip over the length, since we pick the first one pair of symmetric algorithms
+    const kdfId = ((config[offset] << 8) | config[offset + 1]) as KdfId;
+    const aeadId = ((config[offset + 2] << 8) | config[offset + 3]) as AeadId;
 
     const publicKeyConfig = new PublicKeyConfig(
       keyId,
@@ -377,9 +375,9 @@ export class Client {
 
   async encapsulate(encodedRequest: Uint8Array): Promise<ClientRequestContext> {
     let hdr = new Uint8Array([this.config.keyId]);
-    hdr = concatArrays(hdr, i2Osp(this.suite.kem, 2));
-    hdr = concatArrays(hdr, i2Osp(this.suite.kdf, 2));
-    hdr = concatArrays(hdr, i2Osp(this.suite.aead, 2));
+    hdr = concatArrays(hdr, i2Osp(this.suite.kem.id, 2));
+    hdr = concatArrays(hdr, i2Osp(this.suite.kdf.id, 2));
+    hdr = concatArrays(hdr, i2Osp(this.suite.aead.id, 2));
 
     let info = new Uint8Array(new TextEncoder().encode(requestInfoLabel));
     info = concatArrays(info, new Uint8Array([0x00]));
@@ -395,7 +393,7 @@ export class Client {
     const enc = new Uint8Array(sender.enc);
     const exportContext = new TextEncoder().encode(responseInfoLabel);
     const secret = new Uint8Array(
-      await sender.export(exportContext.buffer as ArrayBuffer, this.suite.aeadKeySize),
+      await sender.export(exportContext.buffer as ArrayBuffer, this.suite.aead.keySize),
     );
     const clientRequest = new ClientRequestContext(
       this.suite,
@@ -473,20 +471,20 @@ class ClientRequestContext {
     );
     const salt = concatArrays(senderEnc, serverResponse.responseNonce);
 
-    const kdf = await this.suite.kdfContext();
+    const kdf = this.suite.kdf;
     const prk = await kdf.extract(salt.buffer as ArrayBuffer, this.secret.buffer as ArrayBuffer);
     const aeadKey = await kdf.expand(
       prk,
       new TextEncoder().encode(aeadKeyLabel).buffer as ArrayBuffer,
-      this.suite.aeadKeySize,
+      this.suite.aead.keySize,
     );
     const aeadNonce = await kdf.expand(
       prk,
       new TextEncoder().encode(aeadNonceLabel).buffer as ArrayBuffer,
-      this.suite.aeadNonceSize,
+      this.suite.aead.nonceSize,
     );
 
-    const aeadKeyS = await this.suite.createAeadKey(aeadKey);
+    const aeadKeyS = this.suite.aead.createEncryptionContext(aeadKey);
     const request = new Uint8Array(
       await aeadKeyS.open(
         aeadNonce,
@@ -500,8 +498,8 @@ class ClientRequestContext {
 
   async decodeAndDecapsulate(msg: Uint8Array): Promise<Uint8Array> {
     const responseNonceLen = max(
-      this.suite.aeadKeySize,
-      this.suite.aeadNonceSize,
+      this.suite.aead.keySize,
+      this.suite.aead.nonceSize,
     );
     const responseNonce = msg.slice(0, responseNonceLen);
     const encResponse = msg.slice(responseNonceLen, msg.length);
