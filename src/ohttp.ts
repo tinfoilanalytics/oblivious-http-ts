@@ -1,13 +1,13 @@
-import { loadCrypto } from "./webCrypto";
-import { concatArrays, i2Osp, max } from "./utils";
+import { loadCrypto } from "./webCrypto.js";
+import { concatArrays, i2Osp, max } from "./utils.js";
 import {
   InvalidConfigIdError,
   InvalidContentTypeError,
   InvalidEncodingError,
   InvalidHpkeCiphersuiteError,
-} from "./errors";
+} from "./errors.js";
 import { AeadId, CipherSuite, KdfId, KemId } from "hpke-js";
-import { BHttpDecoder, BHttpEncoder } from "bhttp-js";
+import { BHttpDecoder, BHttpEncoder } from "@dajiaji/bhttp";
 
 const invalidEncodingErrorString = "Invalid message encoding";
 const invalidKeyIdErrorString = "Invalid configuration ID";

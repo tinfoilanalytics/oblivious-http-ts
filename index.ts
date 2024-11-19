@@ -1,4 +1,4 @@
-export * from "./src/errors";
+export * from "./src/errors.js";
 export {
     Client,
     ClientConstructor,
@@ -8,5 +8,5 @@ export {
     ServerResponse,
     ServerResponseContext,
     Server,
-  } from "./src/ohttp";
+  } from "./src/ohttp.js";
   
