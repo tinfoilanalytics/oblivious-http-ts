@@ -1,9 +1,25 @@
 {
-  "name": "ohttp-ts",
+  "name": "oblivious-http",
+  "version": "0.1.0",
+  "description": "Oblivious HTTP implementation in TypeScript",
   "module": "index.ts",
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "bun build ./index.ts --outdir ./dist && bun run build:declaration",
+    "build:declaration": "tsc --emitDeclarationOnly",
+    "prepublishOnly": "bun run build"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "^1.1.13"
   },
   "peerDependencies": {
     "typescript": "^5.6.3"
