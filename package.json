@@ -1,6 +1,6 @@
 {
   "name": "oblivious-http",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Oblivious HTTP implementation in TypeScript",
   "license": "MIT",
   "module": "index.ts",
@@ -13,11 +13,20 @@
       "import": "./dist/index.js"
     }
   },
+  "files": [
+    "dist",
+    "index.ts",
+    "src"
+  ],
   "scripts": {
     "clean": "rm -rf dist",
     "build": "bun build ./index.ts --outdir ./dist && bun run build:declaration",
     "build:declaration": "tsc --emitDeclarationOnly",
     "prepublishOnly": "bun run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tinfoilanalytics/oblivious-http-ts"
   },
   "devDependencies": {
     "@types/bun": "^1.1.13"
