@@ -1,4 +1,6 @@
-# ohttp-ts
+# oblivious-http
+
+A TypeScript [RFC 9458 Oblivious HTTP (OHTTP)](https://www.rfc-editor.org/rfc/rfc9458.html) implementation.
 
 This was originally forked from https://github.com/chris-wood/ohttp-js.
 
