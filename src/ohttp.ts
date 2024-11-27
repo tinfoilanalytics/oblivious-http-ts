@@ -155,7 +155,13 @@ export class PublicKeyConfig {
 
   async encodeAsList(): Promise<Uint8Array> {
     const encodedConfig = await this.encode();
-    return concatArrays(i2Osp(encodedConfig.length, 2), encodedConfig);
+    return concatArrays(
+      new Uint8Array([
+        (encodedConfig.length >> 8) & 0xff,
+        encodedConfig.length & 0xff,
+      ]),
+      encodedConfig
+    );
   }
 }
 
@@ -327,36 +333,90 @@ export class Server {
   }
 
   async encodeKeyConfigAsList(): Promise<Uint8Array> {
-    const publicConfig = await this.config.publicConfig();
-    return publicConfig.encodeAsList();
+    const config = await this.config.publicConfig();
+    return config.encodeAsList();
   }
 }
 
 export class ClientConstructor {
-  async clientForConfig(config: Uint8Array): Promise<Client> {
+  private async parseKeyConfig(config: Uint8Array): Promise<PublicKeyConfig> {
     const keyId = config[0];
     const kemId = ((config[1] << 8) | config[2]) as KemId;
+    
+    // Create temp suite to get public key size
+    const tempSuite = new CipherSuite({
+      kem: kemId,
+      kdf: KdfId.HkdfSha256,  // Placeholder
+      aead: AeadId.Aes128Gcm, // Placeholder
+    });
+    const publicKeySize = tempSuite.kem.publicKeySize;
+    
+    const publicKeyBytes = config.slice(3, 3 + publicKeySize);
+    
+    // After public key, expect length of symmetric algorithms
+    const offset = 3 + publicKeySize;
+    const symAlgosLength = (config[offset] << 8) | config[offset + 1];
+    
+    if (offset + 2 + symAlgosLength > config.length) {
+      throw new InvalidEncodingError('Invalid symmetric algorithms length');
+    }
+
+    // Read first KDF/AEAD pair
+    const kdfId = ((config[offset + 2] << 8) | config[offset + 3]) as KdfId;
+    const aeadId = ((config[offset + 4] << 8) | config[offset + 5]) as AeadId;
+
+    // Create final suite and deserialize public key
     const suite = new CipherSuite({
       kem: kemId,
-      kdf: KdfId.HkdfSha256, // Garbage (to create the suite)
-      aead: AeadId.Aes128Gcm, // Garbage (to create the suite)
+      kdf: kdfId,
+      aead: aeadId,
     });
-    const publicKey = await suite.kem.deserializePublicKey(
-      config.slice(3, 3 + suite.kem.publicKeySize).buffer as ArrayBuffer,
-    );
-    const offset = 3 + suite.kem.publicKeySize + 2; // skip over the length, since we pick the first one pair of symmetric algorithms
-    const kdfId = ((config[offset] << 8) | config[offset + 1]) as KdfId;
-    const aeadId = ((config[offset + 2] << 8) | config[offset + 3]) as AeadId;
 
-    const publicKeyConfig = new PublicKeyConfig(
+    const publicKey = await suite.kem.deserializePublicKey(publicKeyBytes.buffer as ArrayBuffer);
+
+    return new PublicKeyConfig(
       keyId,
       kemId,
       kdfId,
       aeadId,
       publicKey,
     );
+  }
 
-    return new Client(publicKeyConfig);
+  private async parseKeyConfigList(configList: Uint8Array): Promise<PublicKeyConfig> {
+    let offset = 0;
+    
+    // Try to parse as a length-prefixed list first
+    while (offset + 2 <= configList.length) {
+      const configLength = (configList[offset] << 8) | configList[offset + 1];
+      offset += 2;
+
+      if (offset + configLength > configList.length) {
+        // If parsing as list fails, try as single config
+        return await this.parseKeyConfig(configList);
+      }
+
+      try {
+        const config = configList.slice(offset, offset + configLength);
+        return await this.parseKeyConfig(config);
+      } catch (e) {
+        // If first config fails, try next one
+        offset += configLength;
+        continue;
+      }
+    }
+
+    // If we couldn't parse as list, try as single config
+    return await this.parseKeyConfig(configList);
+  }
+
+  async clientForConfig(configList: Uint8Array): Promise<Client> {
+    try {
+      const config = await this.parseKeyConfigList(configList);
+      return new Client(config);
+    } catch (e) {
+      throw new InvalidEncodingError('Failed to parse key configuration');
+    }
   }
 }
 

@@ -208,3 +208,102 @@ describe("test OHTTP end-to-end", () => {
     ).toEqual(new Uint8Array([0x00, 0x04, 0x00, 0x01, 0x00, 0x01]));
   });
 });
+
+describe("test key configuration formats", () => {
+  it("handles standard length-prefixed config list format", async () => {
+    const keyId1 = 0x01;
+    const keyId2 = 0x02;
+    const seed1 = await randomBytes(32);
+    const seed2 = await randomBytes(32);
+    
+    // Create two different configs
+    const keyConfig1 = new DeterministicKeyConfig(keyId1, seed1);
+    const keyConfig2 = new DeterministicKeyConfig(keyId2, seed2);
+    
+    // Get their encoded forms
+    const publicConfig1 = await keyConfig1.publicConfig();
+    const publicConfig2 = await keyConfig2.publicConfig();
+    const encoded1 = await publicConfig1.encode();
+    const encoded2 = await publicConfig2.encode();
+    
+    // Create the standard length-prefixed format
+    const prefix1 = new Uint8Array([encoded1.length >> 8, encoded1.length & 0xff]);
+    const prefix2 = new Uint8Array([encoded2.length >> 8, encoded2.length & 0xff]);
+    
+    const configList = new Uint8Array([
+      ...prefix1, ...encoded1,
+      ...prefix2, ...encoded2
+    ]);
+    
+    // Parse using the constructor
+    const constructor = new ClientConstructor();
+    const client = await constructor.clientForConfig(configList);
+    
+    // Verify the client got the first config
+    // We can verify this by doing an encapsulate/decapsulate round trip
+    const testData = new TextEncoder().encode("test");
+    const requestContext = await client.encapsulate(testData);
+    
+    const server = new Server(keyConfig1);
+    const responseContext = await server.decapsulate(requestContext.request);
+    expect(responseContext.encodedRequest).toEqual(testData);
+  });
+
+  it("supports single key configuration without length prefix", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const server = new Server(keyConfig);
+    
+    // Get a single encoded config
+    const encodedConfig = await server.encodeKeyConfig();
+    
+    // Should be able to parse this directly
+    const constructor = new ClientConstructor();
+    const client = await constructor.clientForConfig(encodedConfig);
+    
+    // Verify with round trip
+    const testData = new TextEncoder().encode("test");
+    const requestContext = await client.encapsulate(testData);
+    const responseContext = await server.decapsulate(requestContext.request);
+    expect(responseContext.encodedRequest).toEqual(testData);
+  });
+
+  it("handles standard wire format from server", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const server = new Server(keyConfig);
+    
+    // Get the standard wire format with length prefix
+    const configList = await server.encodeKeyConfigAsList();
+    
+    // Should be parseable
+    const constructor = new ClientConstructor();
+    const client = await constructor.clientForConfig(configList);
+    
+    // Verify with round trip
+    const testData = new TextEncoder().encode("test");
+    const requestContext = await client.encapsulate(testData);
+    const responseContext = await server.decapsulate(requestContext.request);
+    expect(responseContext.encodedRequest).toEqual(testData);
+  });
+
+  it("handles real server response example", async () => {
+    // This is the real config bytes we saw from the Go server
+    const configBytes = new Uint8Array([
+      0, 41, 0, 0, 32, 92, 144, 218, 219, 147, 176, 113, 187, 227, 185, 101, 
+      205, 237, 103, 36, 103, 121, 222, 232, 173, 140, 159, 74, 76, 69, 52, 
+      147, 48, 19, 5, 101, 119, 0, 4, 0, 1, 0, 1, 0, 41, 128, 0, 32, 128, 
+      33, 218, 190, 161, 133, 238, 77, 103, 90, 149, 32, 159, 111, 75, 158, 
+      135, 73, 16, 76, 71, 201, 158, 163, 135, 128, 80, 10, 136, 177, 170, 
+      28, 0, 4, 0, 1, 0, 1
+    ]);
+    
+    const constructor = new ClientConstructor();
+    const client = await constructor.clientForConfig(configBytes);
+    
+    // Just verify we can create a client and encapsulate data
+    const testData = new TextEncoder().encode("test");
+    const requestContext = await client.encapsulate(testData);
+    expect(requestContext.request).toBeDefined();
+  });
+});
