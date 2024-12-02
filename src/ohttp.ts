@@ -68,7 +68,7 @@ export class KeyConfig {
       kdf: this.kdf,
       aead: this.aead,
     });
-    this.keyPair = suite.kem.generateKeyPair();
+    this.keyPair = suite.generateKeyPair();
   }
 
   async publicConfig(): Promise<PublicKeyConfig> {
@@ -341,15 +341,15 @@ export class ClientConstructor {
     
     // Parse 16-bit symmetric algorithms length
     const symAlgosLength = (config[offset] << 8) | config[offset + 1];
-    
-    // Bounds check
-    if (offset + 2 + symAlgosLength > config.length) {
-      throw new InvalidEncodingError('Invalid symmetric algorithms length');
-    }
 
     // Add check for exactly one KDF/AEAD pair
     if (symAlgosLength !== 4) {
       throw new InvalidEncodingError('This implementation only supports exactly one KDF/AEAD pair');
+    }
+    
+    // Bounds check
+    if (offset + 2 + symAlgosLength > config.length) {
+      throw new InvalidEncodingError('Invalid symmetric algorithms length');
     }
 
     // Parse single KDF/AEAD pair (limitation: only reads first pair)

@@ -10,6 +10,7 @@ import {
 } from "../src/ohttp.ts";
 import {
   InvalidEncodingError,
+  InvalidContentTypeError,
 } from "../src/errors.ts";
 
 
@@ -317,5 +318,138 @@ describe("test key configuration format", () => {
     await expect(constructor.clientForConfig(rawConfig))
       .rejects
       .toThrow(InvalidEncodingError);
+  });
+});
+
+describe("error cases", () => {
+  it("rejects invalid KEM ID", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const publicConfig = await keyConfig.publicConfig();
+    const validConfig = await publicConfig.encode();
+    
+    // Corrupt the KEM ID (bytes 3-4 after length prefix)
+    const invalidConfig = new Uint8Array(validConfig);
+    invalidConfig[3] = 0xFF;  // Invalid KEM ID
+    invalidConfig[4] = 0xFF;
+
+    const constructor = new ClientConstructor();
+    await expect(constructor.clientForConfig(invalidConfig))
+      .rejects
+      .toThrow();
+  });
+
+  it("rejects invalid KDF ID", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const publicConfig = await keyConfig.publicConfig();
+    const validConfig = await publicConfig.encode();
+    
+    // Find offset of symmetric algorithms (after public key)
+    const publicKeySize = publicConfig.suite.kem.publicKeySize;
+    const symAlgoOffset = 2 + 3 + publicKeySize + 2;  // length prefix + preamble + pubkey + length
+    
+    // Corrupt the KDF ID
+    const invalidConfig = new Uint8Array(validConfig);
+    invalidConfig[symAlgoOffset] = 0xFF;  // Invalid KDF ID
+    invalidConfig[symAlgoOffset + 1] = 0xFF;
+
+    const constructor = new ClientConstructor();
+    await expect(constructor.clientForConfig(invalidConfig))
+      .rejects
+      .toThrow();
+  });
+
+  it("rejects invalid AEAD ID", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const publicConfig = await keyConfig.publicConfig();
+    const validConfig = await publicConfig.encode();
+    
+    // Find offset of AEAD ID
+    const publicKeySize = publicConfig.suite.kem.publicKeySize;
+    const aeadOffset = 2 + 3 + publicKeySize + 2 + 2;  // length prefix + preamble + pubkey + length + KDF
+    
+    // Corrupt the AEAD ID
+    const invalidConfig = new Uint8Array(validConfig);
+    invalidConfig[aeadOffset] = 0xFF;
+    invalidConfig[aeadOffset + 1] = 0xFF;
+
+    const constructor = new ClientConstructor();
+    await expect(constructor.clientForConfig(invalidConfig))
+      .rejects
+      .toThrow();
+  });
+
+  it("rejects truncated public key", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const publicConfig = await keyConfig.publicConfig();
+    const validConfig = await publicConfig.encode();
+    
+    // Truncate the config right after KEM ID
+    const truncatedConfig = validConfig.slice(0, 5);  // length prefix + keyId + KEM ID
+
+    const constructor = new ClientConstructor();
+    await expect(constructor.clientForConfig(truncatedConfig))
+      .rejects
+      .toThrow(InvalidEncodingError);
+  });
+
+  it("rejects multiple KDF/AEAD pairs", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const publicConfig = await keyConfig.publicConfig();
+    const validConfig = await publicConfig.encode();
+    
+    // Find where symmetric algorithms length is stored
+    const publicKeySize = publicConfig.suite.kem.publicKeySize;
+    const symAlgoLengthOffset = 2 + 3 + publicKeySize;
+    
+    // Modify length to indicate multiple pairs (8 bytes instead of 4)
+    const invalidConfig = new Uint8Array(validConfig);
+    invalidConfig[symAlgoLengthOffset] = 0x00;
+    invalidConfig[symAlgoLengthOffset + 1] = 0x08;  // Double the normal length
+
+    const constructor = new ClientConstructor();
+    await expect(constructor.clientForConfig(invalidConfig))
+      .rejects
+      .toThrow(/only supports exactly one KDF\/AEAD pair/);
+  });
+
+  it("rejects invalid content type in request", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const server = new Server(keyConfig);
+
+    const invalidRequest = new Request("https://example.com", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"  // Wrong content type
+      }
+    });
+
+    await expect(server.decapsulateRequest(invalidRequest))
+      .rejects
+      .toThrow(InvalidContentTypeError);
+  });
+
+  it("rejects invalid content type in response", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const publicConfig = await keyConfig.publicConfig();
+    
+    const client = new Client(publicConfig);
+    const requestContext = await client.encapsulate(new TextEncoder().encode("test"));
+
+    const invalidResponse = new Response("test", {
+      headers: {
+        "Content-Type": "text/plain"  // Wrong content type
+      }
+    });
+
+    await expect(requestContext.decapsulateResponse(invalidResponse))
+      .rejects
+      .toThrow(InvalidContentTypeError);
   });
 });
