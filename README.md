@@ -37,6 +37,19 @@ git push origin main --tags
 
 This will trigger the GitHub Actions workflow to automatically build and publish the package to `npm`.
 
+## Limitations
+
+1. Only supports a single ciphersuite combination:
+ * KEM: DHKEM(X25519, HKDF-SHA256) (0x0020)
+ * KDF: HKDF-SHA256 (0x0001)
+ * AEAD: AES-128-GCM (0x0001)
+
+2. Only supports a single KDF/AEAD per key configuration.
+
+## Warning
+
+This implementation may have security issues. Use at your own risk!
+
 ## Contributing
 
 We welcome contributions from everyone! Feel free to open issues, submit pull requests, or engage in discussions to help improve this project.

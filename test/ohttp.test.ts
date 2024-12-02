@@ -8,6 +8,10 @@ import {
   KeyConfig,
   Server,
 } from "../src/ohttp.ts";
+import {
+  InvalidEncodingError,
+} from "../src/errors.ts";
+
 
 async function randomBytes(l: number): Promise<Uint8Array> {
   const buffer = new Uint8Array(l);
@@ -191,8 +195,11 @@ describe("test OHTTP end-to-end", () => {
     const publicConfig = await keyConfig.publicConfig();
     const encodedConfig = await publicConfig.encode();
 
+    // Skip past the 2-byte length prefix
+    const config = encodedConfig.slice(2);
+    
     // Ensure the preamble matches
-    expect(encodedConfig.slice(0, 3)).toEqual(new Uint8Array([0x01, 0x00, 0x20]));
+    expect(config.slice(0, 3)).toEqual(new Uint8Array([0x01, 0x00, 0x20]));
 
     // Ensure the public key matches
     const encodedKey = new Uint8Array(
@@ -200,11 +207,115 @@ describe("test OHTTP end-to-end", () => {
         publicConfig.publicKey,
       ),
     );
-    expect(encodedConfig.slice(3, 3 + encodedKey.length)).toEqual(encodedKey);
+    expect(config.slice(3, 3 + encodedKey.length)).toEqual(encodedKey);
 
     // Ensure the tail matches
     expect(
-      encodedConfig.slice(3 + encodedKey.length, 3 + encodedKey.length + 6)
+      config.slice(3 + encodedKey.length, 3 + encodedKey.length + 6)
     ).toEqual(new Uint8Array([0x00, 0x04, 0x00, 0x01, 0x00, 0x01]));
+
+    // Verify length prefix is correct
+    const length = (encodedConfig[0] << 8) | encodedConfig[1];
+    expect(length).toEqual(config.length);
+  });
+});
+
+describe("test key configuration format", () => {
+  it("handles RFC9458 format key configurations", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const server = new Server(keyConfig);
+    
+    // Get the encoded config
+    const config = await server.encodeKeyConfig();
+    
+    // First two bytes should be length prefix
+    const length = (config[0] << 8) | config[1];
+    expect(config.length).toBe(length + 2);
+    
+    // Should be parseable
+    const constructor = new ClientConstructor();
+    const client = await constructor.clientForConfig(config);
+    
+    // Verify with round trip
+    const testData = new TextEncoder().encode("test");
+    const requestContext = await client.encapsulate(testData);
+    const responseContext = await server.decapsulate(requestContext.request);
+    expect(responseContext.encodedRequest).toEqual(testData);
+  });
+
+  it("validates length prefix correctness", async () => {
+    const keyId = 0x01;
+    const keyConfig = new KeyConfig(keyId);
+    const server = new Server(keyConfig);
+    
+    // Get valid encoded config
+    const config = await server.encodeKeyConfig();
+    
+    // Corrupt the length prefix to be too long
+    const corruptConfig = new Uint8Array(config);
+    corruptConfig[0] = 0xFF;
+    corruptConfig[1] = 0xFF;
+    
+    const constructor = new ClientConstructor();
+    await expect(constructor.clientForConfig(corruptConfig))
+      .rejects
+      .toThrow(InvalidEncodingError);
+  });
+
+  it("handles concatenated key configs", async () => {
+    const keyId1 = 0x01;
+    const keyId2 = 0x02;
+    const seed1 = await randomBytes(32);
+    const seed2 = await randomBytes(32);
+    
+    // Create two different configs
+    const keyConfig1 = new DeterministicKeyConfig(keyId1, seed1);
+    const keyConfig2 = new DeterministicKeyConfig(keyId2, seed2);
+    
+    // Get their encoded forms (already length-prefixed)
+    const config1 = await (await keyConfig1.publicConfig()).encode();
+    const config2 = await (await keyConfig2.publicConfig()).encode();
+    
+    // Concatenate them
+    const configList = new Uint8Array([...config1, ...config2]);
+    
+    // First config should be usable
+    const constructor = new ClientConstructor();
+    const client = await constructor.clientForConfig(configList);
+    
+    // Verify with round trip using first server
+    const server = new Server(keyConfig1);
+    const testData = new TextEncoder().encode("test");
+    const requestContext = await client.encapsulate(testData);
+    const responseContext = await server.decapsulate(requestContext.request);
+    expect(responseContext.encodedRequest).toEqual(testData);
+  });
+
+  it("rejects configs without length prefix", async () => {
+    const keyId = 0x01;
+    const config = new KeyConfig(keyId);
+    const publicConfig = await config.publicConfig();
+    
+    // Create raw bytes without length prefix
+    const preamble = new Uint8Array([
+      publicConfig.keyId & 0xFF,
+      (publicConfig.kem >> 8) & 0xFF,
+      publicConfig.kem & 0xFF,
+    ]);
+    const encodedKey = new Uint8Array(
+      await publicConfig.suite.kem.serializePublicKey(publicConfig.publicKey)
+    );
+    const algorithms = new Uint8Array([0x00, 0x04, 0x00, 0x01, 0x00, 0x01]);
+    const rawConfig = new Uint8Array([
+      ...preamble,
+      ...encodedKey,
+      ...algorithms
+    ]);
+    
+    const constructor = new ClientConstructor();
+    await expect(constructor.clientForConfig(rawConfig))
+      .rejects
+      .toThrow(InvalidEncodingError);
   });
 });

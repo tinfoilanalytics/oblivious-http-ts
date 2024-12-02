@@ -40,7 +40,7 @@ function checkHpkeCiphersuite(kem: KemId, kdf: KdfId, aead: AeadId) {
 function encodeSymmetricAlgorithms(kdf: KdfId, aead: AeadId): Uint8Array {
   return new Uint8Array([
     0x00,
-    0x04, // Length
+    0x04, // Only one KDF/AEAD pair supported
     (kdf >> 8) & 0xFF,
     kdf & 0xFF,
     (aead >> 8) & 0xFF,
@@ -86,13 +86,6 @@ export class KeyConfig {
 export class DeterministicKeyConfig extends KeyConfig {
   constructor(keyId: number, ikm: Uint8Array) {
     super(keyId);
-    if (keyId < 0 || keyId > 255) {
-      throw new InvalidConfigIdError(invalidKeyIdErrorString);
-    }
-    this.keyId = keyId;
-    this.kem = KemId.DhkemX25519HkdfSha256;
-    this.kdf = KdfId.HkdfSha256;
-    this.aead = AeadId.Aes128Gcm;
     const suite = new CipherSuite({
       kem: this.kem,
       kdf: this.kdf,
@@ -146,16 +139,17 @@ export class PublicKeyConfig {
         this.publicKey,
       ),
     );
-    const algorithms = encodeSymmetricAlgorithms(
-      this.kdf,
-      this.aead,
-    );
-    return concatArrays(concatArrays(preamble, encodedKey), algorithms);
-  }
+    const algorithms = encodeSymmetricAlgorithms(this.kdf, this.aead);
+    const config = concatArrays(concatArrays(preamble, encodedKey), algorithms);
 
-  async encodeAsList(): Promise<Uint8Array> {
-    const encodedConfig = await this.encode();
-    return concatArrays(i2Osp(encodedConfig.length, 2), encodedConfig);
+    // Wrap with length prefix per RFC 9458 Section 3.2
+    return concatArrays(
+      new Uint8Array([
+        (config.length >> 8) & 0xff,
+        config.length & 0xff,
+      ]),
+      config
+    );
   }
 }
 
@@ -195,7 +189,7 @@ export class ServerResponseContext {
     const responseNonce = await randomBytes(
       max(this.suite.aead.keySize, this.suite.aead.nonceSize),
     );
-    const salt = concatArrays(new Uint8Array(this.enc), responseNonce);
+    const salt = concatArrays(this.enc, responseNonce);
 
     const kdf = this.suite.kdf;
     const prk = await kdf.extract(salt.buffer as ArrayBuffer, this.secret.buffer as ArrayBuffer);
@@ -285,9 +279,9 @@ export class Server {
     }
     const hdr = msg.slice(0, requestHdrLength);
     const keyId = hdr[0];
-    const kemId = ((hdr[1] << 0xFF) | hdr[2]) as KemId;
-    const kdfId = ((hdr[3] << 0xFF) | hdr[4]) as KdfId;
-    const aeadId = ((hdr[5] << 0xFF) | hdr[6]) as AeadId;
+    const kemId = ((hdr[1] << 8) | hdr[2]) as KemId;
+    const kdfId = ((hdr[3] << 8) | hdr[4]) as KdfId;
+    const aeadId = ((hdr[5] << 8) | hdr[6]) as AeadId;
 
     if (keyId != this.config.keyId) {
       throw new InvalidConfigIdError(invalidKeyIdErrorString);
@@ -325,38 +319,87 @@ export class Server {
     const publicConfig = await this.config.publicConfig();
     return publicConfig.encode();
   }
-
-  async encodeKeyConfigAsList(): Promise<Uint8Array> {
-    const publicConfig = await this.config.publicConfig();
-    return publicConfig.encodeAsList();
-  }
 }
 
 export class ClientConstructor {
-  async clientForConfig(config: Uint8Array): Promise<Client> {
+  private async parseKeyConfig(config: Uint8Array): Promise<PublicKeyConfig> {
     const keyId = config[0];
     const kemId = ((config[1] << 8) | config[2]) as KemId;
+    
+    // Create temporary cipher suite just to get key size
+    const tempSuite = new CipherSuite({
+      kem: kemId,
+      kdf: KdfId.HkdfSha256,  // Placeholder
+      aead: AeadId.Aes128Gcm, // Placeholder
+    });
+    const publicKeySize = tempSuite.kem.publicKeySize;
+    
+    // Extract the public key bytes
+    const publicKeyBytes = config.slice(3, 3 + publicKeySize);
+    
+    const offset = 3 + publicKeySize; // Start after key ID, KEM ID, and public key
+    
+    // Parse 16-bit symmetric algorithms length
+    const symAlgosLength = (config[offset] << 8) | config[offset + 1];
+    
+    // Bounds check
+    if (offset + 2 + symAlgosLength > config.length) {
+      throw new InvalidEncodingError('Invalid symmetric algorithms length');
+    }
+
+    // Add check for exactly one KDF/AEAD pair
+    if (symAlgosLength !== 4) {
+      throw new InvalidEncodingError('This implementation only supports exactly one KDF/AEAD pair');
+    }
+
+    // Parse single KDF/AEAD pair (limitation: only reads first pair)
+    const kdfId = ((config[offset + 2] << 8) | config[offset + 3]) as KdfId;
+    const aeadId = ((config[offset + 4] << 8) | config[offset + 5]) as AeadId;
+
+    // Create real cipher suite with actual parameters
     const suite = new CipherSuite({
       kem: kemId,
-      kdf: KdfId.HkdfSha256, // Garbage (to create the suite)
-      aead: AeadId.Aes128Gcm, // Garbage (to create the suite)
+      kdf: kdfId,
+      aead: aeadId,
     });
-    const publicKey = await suite.kem.deserializePublicKey(
-      config.slice(3, 3 + suite.kem.publicKeySize).buffer as ArrayBuffer,
-    );
-    const offset = 3 + suite.kem.publicKeySize + 2; // skip over the length, since we pick the first one pair of symmetric algorithms
-    const kdfId = ((config[offset] << 8) | config[offset + 1]) as KdfId;
-    const aeadId = ((config[offset + 2] << 8) | config[offset + 3]) as AeadId;
 
-    const publicKeyConfig = new PublicKeyConfig(
+    let publicKey: CryptoKey;
+    try {
+      publicKey = await suite.kem.deserializePublicKey(publicKeyBytes.buffer as ArrayBuffer);
+    } catch (e) {
+      throw new InvalidEncodingError("Failed to deserialize public key");
+    }
+
+    if (!publicKey) {
+      throw new InvalidEncodingError('Public key deserialization returned null/undefined');
+    }
+
+    return new PublicKeyConfig(
       keyId,
       kemId,
       kdfId,
       aeadId,
       publicKey,
     );
+  }
 
-    return new Client(publicKeyConfig);
+  async clientForConfig(configList: Uint8Array): Promise<Client> {
+    if (configList.length < 2) {
+      throw new InvalidEncodingError('Invalid key configuration: too short');
+    }
+
+    // Parse 16-bit length prefix in network byte order
+    const configLength = (configList[0] << 8) | configList[1];
+
+    // Verify we have enough bytes for the claimed length
+    if (2 + configLength > configList.length) {
+      throw new InvalidEncodingError('Invalid key configuration length');
+    }
+
+    // Extract just the config bytes without the length prefix
+    const config = configList.slice(2, 2 + configLength);
+
+    return new Client(await this.parseKeyConfig(config));
   }
 }
 
@@ -430,7 +473,7 @@ class ClientRequest {
   }
 
   encode(): Uint8Array {
-    var prefix = concatArrays(this.hdr, this.enc);
+    const prefix = concatArrays(this.hdr, this.enc);
     return concatArrays(prefix, this.encapsulatedReq);
   }
 
