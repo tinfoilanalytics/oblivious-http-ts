@@ -21,18 +21,12 @@ async function randomBytes(l: number): Promise<Uint8Array> {
   return buffer;
 }
 
-function hexToArrayBuffer(input: String): Uint8Array {
+function hexToArrayBuffer(input: string): Uint8Array {
   const view = new Uint8Array(input.length / 2)
   for (let i = 0; i < input.length; i += 2) {
     view[i / 2] = parseInt(input.substring(i, i + 2), 16)
   }
   return view;
-}
-
-function toHex(s: Uint8Array): String {
-  return Array.from(s)
-    .map((i) => i.toString(16).padStart(2, '0'))
-    .join('');
 }
 
 describe("test OHTTP end-to-end", () => {

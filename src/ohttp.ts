@@ -366,7 +366,7 @@ export class ClientConstructor {
     let publicKey: CryptoKey;
     try {
       publicKey = await suite.kem.deserializePublicKey(publicKeyBytes.buffer as ArrayBuffer);
-    } catch (e) {
+    } catch {
       throw new InvalidEncodingError("Failed to deserialize public key");
     }
 

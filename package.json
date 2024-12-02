@@ -22,6 +22,8 @@
     "clean": "rm -rf dist",
     "build": "bun build ./index.ts --outdir ./dist && bun run build:declaration",
     "build:declaration": "tsc --emitDeclarationOnly",
+    "lint": "eslint src",
+    "lint:fix": "bun lint --fix",
     "prepublishOnly": "bun run build"
   },
   "repository": {
@@ -29,7 +31,11 @@
     "url": "https://github.com/tinfoilanalytics/oblivious-http-ts"
   },
   "devDependencies": {
-    "@types/bun": "^1.1.13"
+    "@eslint/js": "^9.16.0",
+    "@types/bun": "^1.1.13",
+    "eslint": "^9.16.0",
+    "globals": "^15.13.0",
+    "typescript-eslint": "^8.17.0"
   },
   "peerDependencies": {
     "typescript": "^5.6.3"
