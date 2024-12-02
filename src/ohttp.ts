@@ -68,7 +68,7 @@ export class KeyConfig {
       kdf: this.kdf,
       aead: this.aead,
     });
-    this.keyPair = suite.generateKeyPair();
+    this.keyPair = suite.kem.generateKeyPair();
   }
 
   async publicConfig(): Promise<PublicKeyConfig> {
@@ -91,7 +91,7 @@ export class DeterministicKeyConfig extends KeyConfig {
       kdf: this.kdf,
       aead: this.aead,
     });
-    this.keyPair = suite.deriveKeyPair(ikm.buffer as ArrayBuffer);
+    this.keyPair = suite.kem.deriveKeyPair(ikm.buffer as ArrayBuffer);
   }
 }
 
