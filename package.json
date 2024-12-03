@@ -1,6 +1,6 @@
 {
   "name": "oblivious-http",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Oblivious HTTP implementation in TypeScript",
   "license": "MIT",
   "module": "index.ts",
